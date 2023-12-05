@@ -28,7 +28,7 @@
 \begin{document}
 
 %%%%%%%%% TITLE
-\title{Lossy Compression for Machine Perception}
+\title{Machine-Oriented Compression}
 
 \author{Natalia Frumkin\\
 The University of Texas at Austin\\
@@ -49,9 +49,16 @@ The University of Texas at Austin\\
 %%%%%%%%% BODY TEXT
 
 \begin{abstract}
-In the field of neural data compression, the prevailing focus has been on optimizing algorithms for either classical distortion metrics, such as PSNR or SSIM, or human perceptual quality. With increasing amounts of data consumed by machines rather than humans, a new paradigm of machine-oriented compression has emerged, creating several new challenges to the development, evaluation, and deployment of systems utilizing lossy compression. In particular, it is unclear how different approaches to lossy compression will affect the performance of downstream machine perception tasks. To address this under-explored area, we evaluate various perception models—including image classification, image segmentation, speech recognition, and music source separation—under severe lossy compression. We utilize several popular codecs spanning conventional, neural, and generative compression architectures. Our results indicate three key findings: (1) machine perceptual quality correlates strongly with deep similarity metrics; (2) minimal loss in machine perceptual quality can be achieved with very high compression rates; and (3) using lossy compressed datasets, (e.g. ImageNet) for pre-training can lead to scenarios where lossy compression increases machine perceptual quality rather than degrading it. These insights lead us to a novel architecture where intermediate representations learnt from a self-supervised vision model and representation from a reconstruction-trained neural codec are jointly compressed. Our code and experiments are available at: \url{https://github.com/danjacobellis/MPQ}.
+Despite significant advances in neural network-based lossy compression, most machine learning datasets and inference pipelines still utilize the decades old JPEG and MPEG standards with compression ratios of only about 5:1.  In this work, we compare two approaches for utilizing neural compression in machine perception systems: (1)~full-input compression, and (2)~model-splitting. In the full-input approach, the reconstruction objective is fully decoupled from downstream tasks, and we find that minimal loss in downstream performance on common tasks--- including classification and segmentation---can be achieved even with compression rates exceeding 500:1. However, since these more potent neural compression systems discard and re-synthesize details, such as texture, faces and text, there is a concern that downstream performance on fine-grained perception tasks could suffer. In the second approach, model-splitting, this loss is avoided by applying the task encoder directly to the the original image, which additionally benefits from simplified inference. We show that the representations derived from two recent self-supervised pre-training methods, DINO and BEiT, can be combined with the model splitting approach to achieve better performance at a lower data rate than the conventional approach of full-input JPEG processing. Our code and experiments are available at:~\url{https://github.com/danjacobellis/MPQ}.
 \end{abstract}
 
+\begin{figure}[t]
+\begin{center}
+\includegraphics[width=0.5\textwidth]{Figures/compression-pipelines.png}
+\end{center}
+\caption{\label{fig:compression-pipelines}%
+Compressed domain learning pipelines usually apply image compression \textit{as a pre-processing step} for downstream vision tasks (pipeline on top). In this project, we consider feature compression for existing SSL representations and use a compressed feature representation for a variety of SSL decoders (bottom pipeline).}
+\end{figure}
 
 \begin{figure*}
 \begin{center}
@@ -64,16 +71,20 @@ Visual comparison of image compression methods. Best viewed zoomed in.}
 
 \section{Introduction}
 
-In contemporary machine perception pipelines ~\cite{ehrlich2022first}, lossy compression techniques are often employed, but using legacy codecs at near-lossless quality levels, thus limiting potential savings in data rate. For instance, the ImageNet dataset, a cornerstone for image classification tasks, utilizes JPEG compression with an average compression ratio of roughly 5:1. As a result, the full ImageNet-21k is over 1.3 TB in size, and common practice is to discard most of this information using a 224x224 reduced resolution version~\cite{ridnikimagenet}. Additionally, many types of sensors necessitate extremely high compression ratios, sometimes exceeding 1000:1~\cite{cocker2022low}, resulting from high resolution measurements combined with limited communication bandwidth.
+In contemporary machine perception pipelines, lossy compression techniques are often employed, but using legacy codecs at near-lossless quality levels, thus limiting potential savings in data rate~\cite{ehrlich2022first}. For instance, the ImageNet dataset, a cornerstone for image classification tasks, utilizes JPEG compression with an average compression ratio of roughly 5:1. As a result, the full ImageNet-21k is over 1.3 TB in size, and common practice is to discard most of this information using a 224x224 reduced resolution version~\cite{ridnik2021imagenet}. Additionally, many types of sensors necessitate extremely high compression ratios, sometimes exceeding 1000:1~\cite{cocker2022low}, resulting from high resolution measurements combined with limited communication bandwidth. As a result, vast amounts of rich, high-fidelity data captured by modern sensors are underutilized or even discarded entirely.
 
-In the decades since the introduction of the ubiquitous JPEG and MPEG standards for images and audio, advancements in lossy compression technologies have demonstrated the capability to achieve far higher compression ratios with less degradation in quality. For example, it has been shown that storing the ImageNet1-1k dataset using the tokens produced by a ViT-VQGAN neural compression model saves a factor of 100:1 in storage and leads to faster and simplified training ~\cite{yu2021vector}\cite{park2023storage}. 
-While the advantages of employing more potent lossy compression techniques are evident, uncertainty surrounding their impact on downstream machine perception tasks remains a significant barrier. For example, Ilyas et al ~\cite{ilyas2019adversarial} demonstrate the existence of signal components, called non-robust features, which which are highly predictive yet imperceptible to humans. Lossy compression during training could eliminate these features and lead to sub-optimal models. Additionally, failure to match the exact lossy compression method and settings during training and inference could lead to distribution shift and unpredictable model behavior.
+In the decades since the introduction of the ubiquitous JPEG and MPEG standards for images and audio, advancements in lossy compression technologies have demonstrated the capability to achieve high compression ratios with minimal degradation in quality. For example, it has been shown that storing the ImageNet-1k dataset using the tokens produced by a ViT-VQGAN neural compression model saves a factor of 100:1 in storage and leads to faster and simplified training ~\cite{yu2021vector}\cite{park2023storage}. 
+While the advantages of employing more potent lossy compression techniques are evident, uncertainty surrounding their impact on downstream machine perception tasks remains a significant barrier. For example, Ilyas et al.,~\cite{ilyas2019adversarial} demonstrate the existence of signal components, called non-robust features, which are highly predictive yet imperceptible to humans. Lossy compression during training is likely to eliminate these features and thereby lead to sub-optimal models~\cite{aydemir2018effects}. Additionally, failure to match the exact lossy compression method and settings during training and inference could lead to distribution shift and unpredictable model behavior.
 
-Our work aims to systematically evaluate the impact of various types of lossy compression---both conventional and neural---on both audio and visual machine learning tasks. By addressing these issues, we aim to bridge the gap between the promising capabilities of advanced lossy compression techniques and their practical implementation in machine learning pipelines.
+While the evaluation of human perceptual quality has been extensively studied, it is less clear how different types lossy compression affect machine perception. Ongoing codec development efforts aim to optimize for machine perception, a paradigm referred to as ``compression for machines~\cite{chamain2021end}" or ``machine-oriented compression~\cite{kang2023super}." Most notably, The JPEG AI standard \cite{ascenso2023jpeg} proposes a single stream image encoder supporting multiple decoders for both human and machine perception. Harell et al.,~\cite{harell2023rate} proposed a taxonomy of three different machine-oriented compression approaches. Notable to our work is the method of full-input machine-oriented compression, where the signal is fully decoded before performing downstream tasks, and the model-splitting approach, where intermediate features are compressed, eliminating the redundancies of having multiple encoders and decoders. Our contributions are twofold:
 
+\begin{itemize}
+\item We systematically evaluate the impact of various types of lossy compression---both conventional and neural---on both audio and visual machine learning tasks using the full-input approach. Our results in this area indicate three key findings: (1) using generative compression, it is feasible to leverage highly compressed data while incurring a negligible impact on machine perceptual quality; (2) machine perceptual quality correlates strongly with deep similarity metrics, indicating a crucial role of these metrics in the development of machine-oriented codecs; and (3) using lossy compressed datasets, (e.g. ImageNet) for pre-training can lead to counter-intuitive scenarios where lossy compression increases machine perceptual quality rather than degrading it.
+\item We combine the model-splitting approach, which typically focuses on a single task, with self-supervised pre-training, which produces general-purpose representations. While the standard approach to model splitting increases the efficiency of inference, exploiting the complementary properties of neural compression and self-supervised learning also allows us to also vastly simplify training of downstream tasks.
+\end{itemize}
 \begin{table}[ht]
 \centering
-\caption{Summary of Datasets and Models}
+\caption{Summary of Datasets and Models used for Full-Input Compression}
 \label{tab:datasets_models}
 \begin{tabular}{llll}
 \toprule
@@ -109,43 +120,41 @@ EnCodec & Neural audio compression & Bitrate: 6 kbps \\
 \end{table}
 
 
-\section{Methods}
+\section{Machine Perceptual Quality Under Full-Input Compression}
 
-Our study probes the effects of audio and image compression techniques on machine perceptual quality under severe lossy compression. We use six datasets and test the efficacy of popular pre-trained models on various discriminative tasks. Machine perceptual quality is gauged by the performance on the validation splits of these datasets, and the compression performance is evaluated using conventional rate-distortion metrics as well as deep similarity metrics.
+We investigate the impact of different audio and image compression techniques on machine perceptual quality under severe lossy compression---which we define as ratios compression ratios between 20:1 and 1000:1---and compare against a baseline that does not have additional compression. We employ six datasets, seven different lossy compression methods, and use popular pre-trained models for various discriminative tasks as summarized in Tables \ref{tab:datasets_models} and \ref{tab:compression_methods}. We use the performance on the validation split of each dataset as a measure of machine perceptual quality. We evaluate the compression performance based on bitrate, conventional distortion metrics, and deep similarity metrics. 
 
-We employ the ImageNet-1k dataset for image classification, using a vision transformer (ViT) \cite{dosovitskiy2020image} pretrained on ImagNet-21k . The NIH ChestX-ray8 dataset \cite{wang2017chestx} for pneumonia classification and the bean disease dataset \footnote{\href{https://github.com/AI-Lab-Makerere/ibean}{ibean:Bean disease dataset}} are also used in conjunction with an ImageNet-21k pre-trained ViT. Semantic segmentation is performed on the ADE20k dataset \cite{zhou2017scene} using the SegFormer model \cite{xie2021segformer}. The Common Voice 11.0 dataset \cite{ardila2020common} and the Whisper model \cite{radford2023robust} are used for speech recognition. Finally, the MUSDB-HQ dataset, an uncompressed version of MUSDB18 \cite{rafii2017musdb18}, and the Demucs v3 model \cite{defossez2021hybrid} are used for music source separation. These datasets and corresponding models are summarized in \ref{tab:datasets_models}.
+\paragraph{Models and datasets.} We employ the ImageNet-1k dataset for image classification, using a vision transformer (ViT) pre-trained on ImageNet-21k ~\cite{dosovitskiy2020image}. The NIH ChestX-ray8 dataset ~\cite{wang2017chestx} for pneumonia classification and the bean disease dataset \cite{singh2023classification} are also used in conjunction with an ImageNet-21k pre-trained ViT. Semantic segmentation is performed on the ADE20k dataset \cite{zhou2017scene} using the SegFormer model \cite{xie2021segformer}. The Common Voice 11.0 dataset \cite{ardila2020common} and the Whisper model \cite{radford2023robust} are used for speech recognition. Finally, the MUSDB-HQ dataset, an uncompressed version of MUSDB18 \cite{rafii2017musdb18}, and the Demucs v3 model \cite{defossez2021hybrid} are used for music source separation. These datasets and corresponding models are summarized in Table \ref{tab:datasets_models}.
 
-The compression methods in our study encompass JPEG, WEBP, the neural compression approach Minnen, Ballé, Toderici 2018 (mbt2018) \cite{minnen2018joint} as implemented in Compressai \cite{begaint2020compressai}, HiFiC \cite{mentzer2020high} from the Tensorflow Compression library \cite{balle2022tensorflow}, the audio codecs MPEG Layer III (MP3), Opus, and the neural audio model EnCodec \cite{defossez2022high}. Table \ref{tab:compression_methods} summarizes these methods.
+\paragraph{{Compression methods}}The image compression methods in our study include JPEG, WEBP, the distortion-optimized neural compression approach from Minnen et al. ~\cite{minnen2018joint} , and the generative compression method HiFiC ~\cite{mentzer2020high}. For audio compression, we use MPEG Layer III (MP3), Opus, and the neural audio model EnCodec \cite{defossez2022high}. Table \ref{tab:compression_methods} summarizes these methods. Additional implementation details and a listing of specific model variants are available in our code repository~\footnote{\href{https://github.com/danjacobellis/MPQ}{Github: danjacobellis/MPQ}}.
 
-To evaluate compression performance, we include conventional rate-distortion figures alongside two deep similarity metrics: Learned Perceptual Image Patch Similarity (LPIPS) \cite{zhang2018unreasonable} for images and Contrastive Deep Perceptual Audio Similarity Metric (CDPAM) \cite{manocha2021cdpam} for audio. These metrics are computed per sample and averaged over the entire dataset.
+\paragraph{Evaluation metrics.} We use conventional rate-distortion metrics as well as deep similarity metrics---quality metrics derived from deep neural networks and trained to predict human judgments of quality. Each metric is calculated on a per-sample basis.
+\begin{itemize}
 
-\begin{table*}
-\centering
-\caption{Feature Compression Results using BeiT-2}
-\label{tab:feature_compression_results}
-\begin{tabular}{lccccc}
-\toprule
-Downstream Task & Compression Scheme & Finetune All & Finetune Task Layer Only & BPP & Compression Ratio \\
-\midrule
-% \multicolumn{5}{c}{BeiT Image Classification} \\
-\cmidrule(lr){1-5}
-& None & 86.4 & 86.2 & 0.490 & 49 \\
-BeiT Image Classification  & with 8-bit FSQ & \textbf{87.7} & \textbf{87.7} & 0.041 & 588 \\
-&INT8 Quantized Code & 86.4 & 86.1 & 0.122 & 196 \\
-&INT2 Quantized Code & 85.4 & 85.2 & \textbf{0.031} & \textbf{784} \\
-\midrule
-% \multicolumn{5}{c}{BeiT Semantic Segmentation} \\
-\cmidrule(lr){1-5}
-BeiT Semantic Segmentation & None & \textbf{53.5} & 53.0 & 2006 & 0.0120 \\
- % & with 32-bit FSQ & - & 52.18 & 128 & 0.1875 \\
- & with 8-bit FSQ & - & 41.65 & 32 & 0.75 \\
-  & add all features & - & 54.74 & 32 & 0.75 \\
-\bottomrule
-\end{tabular}
-\end{table*}
+\item \textit{Bits Per Pixel (BPP)} and \textit{Bits Per Sample (BPS)} are used to measure the rate of images and audio signals respectively. For the EnCodec model, which supports a default mode where the VQVAE codes are directly stored and a secondary mode that uses additional entropy coding, we use the default mode without entropy coding and calculate BPS using the the product of the codebook size and the number codes. For all other codecs, we directly measure the rate based on the size of the encoded file.
 
-\textbf{Feature Compression Approach}.
-Due to the inherent limits of full-input machine-oriented compression, we investigate an alternative architecture based on feature compression. We compute the embeddings produced by BeiT-2, a self-supervised vision transformer that is known to generate representations that transfer effectively to a variety of tasks, including image classification and segmentation \cite{peng2022beit}. While these representation are known to be effective for downstream tasks, they are considerably larger than the corresponding compressed image. To mitigate this, we explore the training of a neural compression model specifically tailored to these high-dimensional features \cite{singh2020end}. Our codec is based on Finite Scalar Quantization (FSQ), a simplified variant of the VQ-VAE. \cite{mentzer2023finite}.
+\item \textit{Peak Signal-to-Noise Ratio (PSNR)} is used as a conventional distortion metric for both images and audio. We represent image signals using the range $[0,255]$ and represent audio signals using the range $[-1,1]$, so \( \text{PSNR} = 20\log_{10}(255) - 10\log_{10}(\text{MSE}) \) for images and \( \text{PSNR} = -10\log_{10}(\text{MSE}) \) for audio.
+
+\item \textit{Learned Perceptual Image Patch Similarity (LPIPS)}\cite{zhang2018unreasonable} is a deep similarity metric specifically designed for images. It captures complex perceptual differences that simpler metrics like PSNR or SSIM are insensitive to. In the table, we report \( -10\log_{10}(\text{LPIPS similarity}) \) to align it with the other quality metrics.
+
+\item  \textit{Contrastive Deep Perceptual Audio Similarity Metric (CDPAM)} \cite{manocha2021cdpam} is a deep similarity metric is designed for audio. Like LPIPS for images, it captures perceptual differences more effectively than PSNR. Similar to LPIPS, we report \( -10\log_{10}(\text{CDPAM similarity}) \).
+\end{itemize}
+
+
+\begin{figure}
+\begin{center}
+\includegraphics[width=0.5\textwidth]{Figures/img0_patch0.png}
+\end{center}
+\caption{\label{fig:beit-features}%
+A sample of BeiT-2 features. The uncompressed feature representation consists of four features (the output feature maps of attention blocks 3,5,7, and 11). For compression, we consider applying vector quantizers on this representation directly, as well as element-wise addition of all four feature maps to compress by 4X.}
+\end{figure}
+
+\section{Model-Splitting Based Compression}
+
+% \textbf{Feature Compression Approach}.
+% Due to the inherent limits of full-input machine-oriented compression, we investigate an alternative architecture based on feature compression. We compute the embeddings produced by BeiT-2, a self-supervised vision transformer that is known to generate representations that transfer effectively to a variety of tasks, including image classification and segmentation \cite{peng2022beit}. While these representation are known to be effective for downstream tasks, they are considerably larger than the corresponding compressed image. To mitigate this, we explore the training of a neural compression model specifically tailored to these high-dimensional features \cite{singh2020end}. Our codec is based on Finite Scalar Quantization (FSQ), a simplified variant of the VQ-VAE. \cite{mentzer2023finite}.
+
+
 
 \begin{figure*}
 \begin{center}
@@ -167,6 +176,7 @@ Performance on various machine perception tasks under full-input machine coding.
 \toprule
 Metric & Dataset & Baseline & JPEG & WEBP & MBT & HiFiC \\
 \midrule
+PSNR & ImageNet &  & 23.2 & 24.8 & \textbf{26.7} & 26.3 \\
      & ADE20k &  & 23.9 & 25.6 & \textbf{28.1} & 27.7 \\
      & Bean &  & 20.8 & 22.0 & \textbf{22.9} & 21.8 \\
      & X-ray &  & 30.0 & 32.7 & 34.7 & \textbf{36.4} \\
@@ -174,7 +184,7 @@ Metric & Dataset & Baseline & JPEG & WEBP & MBT & HiFiC \\
 LPIPS & ImageNet &  & 6.11 & 7.02 & 7.95 & \textbf{10.8} \\
       & ADE20k &  & 7.13 & 7.96 & 8.99 & \textbf{11.8 }\\
       & Bean &  & 5.72 & 6.75 & 6.90 & \textbf{9.78} \\
-      & X-ray &  & 6.85 & 7.58 & \textbf{7.80} & 13.2 \\
+      & X-ray &  & 6.85 & 7.58 & 7.80 & \textbf{13.2} \\
 \midrule
 BPP & ImageNet &  & \textbf{0.26} & 0.148 & 0.150 & 0.026 \\
     & ADE20k &  & \textbf{0.26} & 0.14 & 0.14 & 0.025 \\
@@ -215,24 +225,57 @@ mIOU & ADE20k & \textbf{0.319} & 0.119 & 0.189 & 0.208 & 0.301 \\
     \end{subtable}%
 \end{table*}
 
+\section{Results of Full-Input Compression}
 
-\section{Results}
+Our evaluation across multiple datasets and machine perception tasks reveals key insights into the impact of lossy compression on machine perceptual quality. The results are shown in Figure~\ref{fig:results} and are summarized in Tables~\ref{tab:image_compression_comparison} and~\ref{tab:audio_compression_comparison}. For image-based tasks, LPIPS is a better predictor of downstream performance than PSNR, and generative compression (HiFiC) performs the best at all but one of the tasks (Chest X-ray) despite having the lowest average bitrate, and consistently achieves results close to the uncompressed baseline. In the audio domain, similar trends are observed; the audio quality measured by CDPAM is better predictor of downstream performance than PSNR, and, among the methods tested, EnCodec provides the best trade-off between rate and downstream performance for both datasets.
 
-Our evaluation across multiple datasets and machine perception tasks reveals key insights into the impact of lossy compression on machine perceptual quality. The results are summarized in Table~\ref{tab:compression_comparison}.
-For image-based tasks, LPIPS is a better predictor of downstream performance than PSNR, and generative compression (HiFiC) performs the best at all but one of the tasks (Chest X-ray) despite having the lowest average bitrate, and consistently achieves results close to the uncompressed baseline.
-In the audio domain, similar trends are observed; the audio quality measured by CDPAM is better predictor of downstream performance than PSNR, and, among the methods tested, EnCodec provides the best tradeoff between rate and downstream performance for both datasets.
+\begin{table*}
+\centering
+\caption{Feature Compression Results using BeiT-2}
+\label{tab:feature_compression_results}
+\begin{tabular}{l|ccccc}
+\toprule
+Downstream Task & Compression Scheme & Finetune All & Finetune Task Layer Only & BPP & Compression Ratio \\
+\midrule
+% \multicolumn{5}{c}{BeiT Image Classification} \\
+\cmidrule(lr){1-5}
+BeiT Image & None & 86.4 & 86.2 & 0.490 & 49 \\
+  Classification & with 8-bit FSQ & \textbf{87.7} & \textbf{87.7} & 0.041 & 588 \\
+&INT8 Quantized Code & 86.4 & 86.1 & 0.122 & 196 \\
+&INT2 Quantized Code & 85.4 & 85.2 & \textbf{0.031} & \textbf{784} \\
+\midrule
+% \multicolumn{5}{c}{BeiT Semantic Segmentation} \\
+\cmidrule(lr){1-5}
+BeiT Semantic & None & 53.5 & 53.0 & 2006 & 0.0120 \\
+ % & with 32-bit FSQ & - & 52.18 & 128 & 0.1875 \\
+ Segmentation & 8-bit FSQ & - & 41.65 & 32 & 0.75 \\
+  & element-wise add & - & \textbf{54.74} & 96 & 0.25 \\
+  &  element-wise add + 8-bit FSQ & - & 53.15 & \textbf{8} & \textbf{3} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\section{Results of Model-Splitting Compression}
 
 Our initial feature compression experiments demonstrate promising results. As shown in table ~\ref{tab:feature_compression_results}, utilizing FSQ allows us to achieve a high compression rate with no loss in classification accuracy. For semantic segmentation, we are presented with a significant compression challenge -- the encoder generates a large intermediary representation (size is [4,678,32,32]) which leads to a 2,006 bits-per-pixel, however, we plan to consider extreme compression techniques, including FSQ, to attempt at reaching $\sim 0.1$ bits-per-pixel.
 \section{Discussion}
 
-\textbf{Deep similarity metrics and generative compression}. It is well known that deep similarity metrics are highly effective at predicting human perceptual quality as measured by mean opinion score (MOS). Across the six datasets tested, our results indicate that these metrics are also strongly correlated with machine perceptual quality, measured by the downstream performance of machine learning models. One may be concerned that generative compression methods (e.g. HiFiC and EnCodec) which discard and re-synthesise details are ill-suited for use within machine perception pipelines. However, our results indicate that this is not the case for any of the tasks tested.
+\paragraph{Generative compression preserves machine perceptual quality.} One area of concern is that generative compression methods like HiFiC and EnCodec, whose adversarial training objectives allow them to discard details at the encoder and re-synthesise them at the decoder, are ill-suited for use within machine perception pipelines. However, our results indicate the contrary; despite having the highest compression ratios among the methods tested, these methods performed well across all tasks, often outperforming methods with significantly higher bitrate. Unfortunately, current generative compression methods are far from being production-ready, and rely on architectures which are difficult to train, adapt, and deploy. However, recent advancements have shown remarkable inference speedup in score-based generative models ~\cite{song2023consistency} and vastly simplified training procedures for VQVAEs ~\cite{mentzer2023finite}. By incorporating such advancements and making these methods more accessible, generative compression could enable new applications, such as satellite, maritime and aerial remote sensing systems that require very high compression ratios.
 
-\textbf{Pretraining on lossy datasets}. Our experiments reveal an intriguing phenomenon: for models pre-trained on lossy datasets like ImageNet, additional lossy compression at test time may have negligible impact on performance, and can sometimes behave as an enhancement. For example, the top-1 classification accuracy on the bean disease dataset is higher when compressed using HiFiC (compression ratio of 839:1) than when using the original lossless images. Even more surprising is that JPEG compression (see ~\ref{fig:image_compression_methods}) results in an increase in pneumonia classification performance on the Chest X-ray dataset, despite having the lowest quality measured by PSNR or LPIPS. Viewing lossy compression as a type of distribution shift provides one possible explanation for this phenomenon; subtle high-frequency details that only exist in lossless images never occur in pre-training datasets like the JPEG-compressed ImageNet.
+\paragraph{Correlation of machine perceptual quality with deep similarity metrics.} Deep similarity metrics like LPIPS and CDPAM are known to be highly effective at predicting human perceptual quality as measured by mean opinion score (MOS). Across the six datasets tested, our results indicate that such metrics are also strongly correlated with machine perceptual quality, despite only being trained in a supervised fashion to predict human judgments of signal distortion pairs. A promising avenue for future research would be to extend the training objectives for these metrics to include machine judgments of distortion pairs, making them even more robust.
 
-\textbf{Next Steps}
-From our BeiT classification experiments, we are successful at generating high compression ratios of $> 100:1$ using FSQ and standard integer quantization. In our next phase of this project, we will address the harder problem of compression for semantic segmentation.
+\paragraph{Pretraining on lossy datasets.} Our experiments reveal a surprising phenomenon: for models pre-trained on lossy datasets like ImageNet, additional lossy compression at test time may have negligible impact on performance, and can sometimes behave as an enhancement. For example, the top-1 classification accuracy on the bean disease dataset is higher when compressed using HiFiC (compression ratio of 839:1) than when using the original lossless images. Even more surprising is that severe JPEG compression (see Figure ~\ref{fig:image_compression_methods}) results in an increase in pneumonia classification performance on the Chest X-ray dataset, despite having the lowest quality measured by PSNR or LPIPS. Viewing lossy compression as a type of distribution shift provides one possible explanation for this phenomenon; subtle high-frequency details that only exist in lossless images never occur in pre-training datasets like the JPEG-compressed ImageNet. Exploring pre-training with lossless data may be feasible considering the moderate compression ratios (5:1) used such datasets. The development of lossless datasets at ImageNet or larger scale could be valuable for the development of neural compression systems---for both human and machine applications.  
 
-Handling variable-size images \& audio remains a key challenge in machine-oriented compression systems. For example, most image compression techniques automatically resize images to 224x244, which purposefully removes information prior to compression. Our results for feature compression indicate a promising path forward: by maintaining two representations (one fixed in size and another variable) which are jointly compressed, we can maintain good reconstruction quality and near-lossless performance on downstream tasks.
+\paragraph{Redundancies in SSL Representations}
+
+% \textbf{Next Steps}
+% From our BeiT classification experiments, we are successful at generating high compression ratios of $> 100:1$ using FSQ and standard integer quantization. In our next phase of this project, we will address the harder problem of compression for semantic segmentation.
+
+% Additionally, handling variable-size images \& audio remains a key challenge in machine-oriented compression systems. For example, most image compression techniques automatically resize images to 224x244, which purposefully removes information prior to compression. Our results for feature compression indicate a promising path forward: by maintaining two representations (one fixed in size and another variable) which are jointly compressed, we can maintain good reconstruction quality and near-lossless performance on downstream tasks.
+
+\subsection{Individual Member Contribution}
+
+
 
 {\small
 \bibliographystyle{ieee_fullname}
