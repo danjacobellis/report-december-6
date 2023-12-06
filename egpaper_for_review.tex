@@ -80,7 +80,7 @@ While the evaluation of human perceptual quality has been extensively studied, i
 
 \begin{itemize}
 \item \textit{Evaluation of Existing Full-Input Methods}: We systematically evaluate the impact of various types of lossy compression---both conventional and neural---on audio and visual machine learning tasks using the full-input approach. Our results in this area indicate three key findings: (1) using generative compression, it is feasible to leverage highly compressed data while incurring a negligible impact on machine perceptual quality; (2) machine perceptual quality correlates strongly with deep similarity metrics, indicating a crucial role of these metrics in the development of machine-oriented codecs; and (3) using lossy compressed datasets, (e.g. ImageNet) for pre-training can lead to counter-intuitive scenarios where lossy compression increases machine perceptual quality rather than degrading it.
-\item \textit{Feature Compression on SSL Representations}: We combine the model-splitting approach, which typically focuses on a single task, with self-supervised pre-training, which produces general-purpose representations. While the standard approach to model splitting increases the efficiency of inference, exploiting the complementary properties of neural compression and self-supervised learning (SSL) also allows us to also vastly simplify training of downstream tasks. We consider model-splitting for DINOv2 and BeiT-2 and are able to achieve compression ratios of 588:1 and 3:1 for image classification and segmentation respectively.
+\item \textit{Feature Compression on SSL Representations}: We combine the model-splitting approach, which typically focuses on a single task, with self-supervised pre-training, which produces general-purpose representations. While the standard approach to model splitting increases the efficiency of inference, exploiting the complementary properties of neural compression and self-supervised learning (SSL) also allows us to also vastly simplify training of downstream tasks. We consider model-splitting for DINOv2 and BeiT-2 and are able to achieve compression ratios of 588:1 and 7:1 for image classification and segmentation respectively.
 \end{itemize}
 \begin{table}[ht]
 \centering
@@ -153,7 +153,7 @@ A sample of BeiT-2 features. The uncompressed feature representation consists of
 
 Existing self-supervised pre-training methods including MoCo~\cite{chen2021empirical}, BYOL~\cite{grill2020bootstrap}, BeiT~\cite{peng2022beit}, and DINO~\cite{oquab2023dinov2} produce strong feature representations for a variety of downstream tasks. Once pre-trained, the learned encoders can be used for a variety of task-specific decoders. We leverage these powerful SSL encoders for model-splitting compression by applying feature compression on existing SSL encoder features, allowing us to reuse the same compressed representation for all task-specific decoders. To compress these representations, we consider a variety of quantization technieques and rate-distortion autoencoders as outlined below. 
 
-\textbf{Integer Quantization} Standard post-training quantization is often applied to model features for fast inference and reduced model size~\cite{wu2020integer}. These post-training techniques can be similarly applied to the SSL features to achieve high compression ratios. In this work, we will consider uniform quantization for a variety of different bit-widths, INT8, INT4, and INT2, represented in the following form:
+\textbf{Scalar Quantization} Standard post-training quantization is often applied to model features for fast inference and reduced model size~\cite{wu2020integer}. These post-training techniques can be similarly applied to the SSL features to achieve high compression ratios. In this work, we will consider uniform quantization for a variety of different bit-widths, INT8, INT4, and INT2, represented in the following form:
 
 \begin{equation}
   Q(\textbf{x}, \delta, b) = \texttt{clip}(\Big{\lfloor} \frac{\textbf{x}}{\delta} \Big{\rceil}, -2^{b-1}+1, 2^{b-1}-1)
@@ -162,9 +162,9 @@ Existing self-supervised pre-training methods including MoCo~\cite{chen2021empir
 
 where $\delta$ is the scale parameter analytically computed using MinMax quantization~\cite{jacob2018quantization}, $b$ is bit-width (8,4, or 2) and $\textbf{x}$ is the original 32-bit floating point value.
 
-\textbf{Vector Quantizers} Vector quantizers (VQ) are widely used in image compression literature for superior performance~\cite{Duan_2023, el-nouby2023image}. Recently, Finite Scalar Quantization (FSQ)  has shown improved performance over standard VQ-VAE representations~\cite{mentzer2023finite}. In particular, FSQ is more robust to codebook collapse since it's implicit codebook representation allows better codebook utilization and removes the auxiliary losses present for standard VQ-VAE style vector codebooks.
+\textbf{Learned Vector Quantization} Learned vector quantizers (VQ)~\cite{van2017neural} can achieve better performance to scalar quantization, and are widely used for both audio~\cite{defossez2022high} and image ~\cite{Duan_2023, el-nouby2023image} compression. Recently, Finite Scalar Quantization (FSQ)  has shown improved performance over standard VQ-VAE representations~\cite{mentzer2023finite}. In particular, FSQ is more robust to codebook collapse since it's implicit codebook representation allows better codebook utilization and removes the auxiliary losses present for standard VQ-VAE style vector codebooks.
 
-\textbf{Rate-Distortion Autoencoder (RDAE)} Rather than applying a vector quantizer to compress the intermediary representation as done in VQ-VAEs, RDAEs rely on an auxiliary loss called the rate-distortion function which attempts to minimize the entropy of an autoencoder's intermediary representation~\cite{giraldo2014ratedistortion}. Once the latent feature has minimal entropy, it can be compressed using a lossless data compression method such as Huffman coding or arithmetic coding.
+\textbf{Rate-Distortion Autoencoder (RDAE)} While learned vector quantization compresses signals by using a low-dimensional codebook, an alternative approach is construct a differentiable approximation entropy of an intermediate layer, so that the rate-distortion function $R+\lambda D$ can be directly optimized~\cite{balle2017end}. The distortion function can be any differentiable or similarity metrics, such as MSE, SSIM, or LPIPS.  Once the latent feature has minimal entropy, it can be compressed using a lossless data compression method such as Huffman coding or arithmetic coding. For compressing, DINO features, we constructed RDAEs with symmetric analysis and sythesis transforms and optimized them for MSE reconstruction using $\lambda=0.1$. We tested two archetectures; a high-rate variant with two analysis layers and $2\times$ spatial downsampling in each dimension, and a high-rate variant with three analysis and and $4\times$ spatial downsampling.
 
 We consider scalar quantization, vector quantizers, and rate-distortion autoencoders for SSL feature compression. Scalar quantization is applied in a post-training manner, whereas the vector quantizer and RDAEs are fine-tuning in conjunction with the downstream decoders. Sections \ref{sec:model-splitting-results} will evaluate these compression methods on two popular SSL representations.
 % \textbf{Feature Compression Approach}.
@@ -279,7 +279,31 @@ BeiT Semantic & None & 53.5 & 53.0 & 384 & 0.0625 \\
 % Naturally, semantic segmentation's feature space must be more 
 As shown in Table~\ref{tab:feature_compression_results}, utilizing FSQ allows us to achieve a high compression rate with no loss in classification accuracy. Surprisingly, post-training quantization does not degrade performance sharply, and offers extremely high compression ratios. Quantizing to INT2 yields a compression ratio of 784X with only a 1.2\% drop in accuracy. For semantic segmentation, we are presented with a significant compression challenge -- the encoder generates a large intermediary representation (size is [4,768,32,32]) which leads to a 384 bits-per-pixel. For image classification, we are able to directly use the pooled feature representation from attention block 11, whereas the BeiT-2's segmentation decoder requires the four pre-pooled feature representations shown in Figure~\ref{fig:beit-features}. Applying 8-bit FSQ as done with image classification generates a whopping 32 bits per pixel (expansion, not compression). To achieve compression, we combine the four pre-pooled representations using a element-wise add and find that this representation yields better performance than baseline (+1.24 mIOU). Combining element-wise add and 8-bit FSQ, we achieve a compression ratio of 3X with -0.35 mIOU degradation.
 
-\textbf{DINOv2 Compression}
+\begin{table}
+\centering
+\caption{DINO Compression Results}
+\label{tab:dino_compression_results}
+\begin{tabular}{l|cccc}
+\toprule
+Task & RDAE & Linear & BPP & Ratio \\
+\midrule
+% \multicolumn{5}{c}{DINO Image Classification} \\
+\cmidrule(lr){1-5}
+INet-1k Acc. & None & 86.4 & 250.8 & 1:10 \\
+& 4x & 85.5 & 16.0 & 7:1 \\
+\midrule
+% \multicolumn{5}{c}{DINO Semantic Segmentation} \\
+\cmidrule(lr){1-5}
+ADE20k mIOU & None & 42.2 & 250.8 & 1:10 \\
+& 2x & 39.2 & 16.0 & 1.5:1 \\
+& 4x & 32.1 & 3.5 & 7:1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\textbf{DINOv2 Compression} We train RDAEs to compress the patch tokens produced by DINOv2. The results are shown in Table~\ref{tab:dino_compression_results}. We use the Vimeo90k dataset~\cite{xue2019video} at $448\times252$ resolution and train RDAEs on the corresponding patch tokens (size $1536\times32\times18$). For both the $2\times$ and the $4\times$ variant, we use symmetric analysis and synthesis transforms with 4096 channels in each intermediate layer, which consists of 5x5 convolution, 2x downsampling and generalized divisive normalization (GDN)~\cite{johnston2019computationally}, while the input and 
+output layers are $1x1$ convolutions without downsampling. To reduce the parameter count, we split the channels into 32 groups, resulting in 32 filters of size $128\times5\times5$ in each layer. We use the same linear probing technique to perform classification and segmentation as in the original DINOv2 paper~\cite{oquab2023dinov2}. The linear heads are only trained once on the uncompressed inputs, and are never fine-tuned on the compressed variants.  While the downstream performance is reduced compared to the BEiT/FSQ model, Our DINO/RDAE combination requires significantly less training resources, both for the compression model and the task-specific heads, and can be more easily pushed to higher compression rates. Full code and additional details on the RDAE/DINO model are available in the repository~\footnote{\href{https://github.com/danjacobellis/CMMR}{Github: danjacobellis/CMMR}}.
 
 \section{Discussion}
 
